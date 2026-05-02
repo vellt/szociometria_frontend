@@ -1093,29 +1093,56 @@ function SociogramCanvas({ students, responses }) {
   const endY = ty - uy * nodeR;
   const angle = Math.atan2(endY - startY, endX - startX);
 
-  const count = asMutualLayer
-    ? Math.max(1, Math.min(l.forwardWeight || 0, l.backwardWeight || 0))
-    : Math.max(1, l.weight || 1);
+  if (asMutualLayer) {
+    const count = Math.max(1, Math.min(l.forwardWeight || 0, l.backwardWeight || 0));
+    const spacing = expanded ? 7 : 5;
+    const totalWidth = (count - 1) * spacing;
 
+    ctx.save();
+    ctx.strokeStyle = "#1a73e8";
+    ctx.fillStyle = "#1a73e8";
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = expanded ? 2.2 : 1.9;
+
+    for (let i = 0; i < count; i++) {
+      const offset = i * spacing - totalWidth / 2;
+
+      const aX = startX + nx * offset;
+      const aY = startY + ny * offset;
+      const bX = endX + nx * offset;
+      const bY = endY + ny * offset;
+
+      ctx.beginPath();
+      ctx.moveTo(aX, aY);
+      ctx.lineTo(bX, bY);
+      ctx.stroke();
+
+    }
+
+    ctx.restore();
+    return;
+  }
+
+  const color = l.type === "negative" ? "#d93025" : "#188038";
   const spacing = expanded ? 7 : 5;
-  const totalWidth = (count - 1) * spacing;
 
-  const color = asMutualLayer
-    ? "#1a73e8"
-    : l.type === "negative"
-      ? "#d93025"
-      : "#188038";
+  const forwardCount = Math.max(0, l.forwardWeight || 0);
+  const backwardCount = Math.max(0, l.backwardWeight || 0);
+  const totalCount = Math.max(1, forwardCount + backwardCount);
+  const totalWidth = (totalCount - 1) * spacing;
 
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.globalAlpha = asMutualLayer ? 0.9 : 0.48;
-  ctx.lineWidth = asMutualLayer ? (expanded ? 2.2 : 1.9) : 1.7;
+  ctx.globalAlpha = 0.48;
+  ctx.lineWidth = 1.7;
+  ctx.setLineDash([5, 5]);
 
-  if (!asMutualLayer) ctx.setLineDash([5, 5]);
+  let lineIndex = 0;
 
-  for (let i = 0; i < count; i++) {
-    const offset = i * spacing - totalWidth / 2;
+  for (let i = 0; i < forwardCount; i++) {
+    const offset = lineIndex * spacing - totalWidth / 2;
+    lineIndex++;
 
     const aX = startX + nx * offset;
     const aY = startY + ny * offset;
@@ -1126,10 +1153,23 @@ function SociogramCanvas({ students, responses }) {
     ctx.moveTo(aX, aY);
     ctx.lineTo(bX, bY);
     ctx.stroke();
+    drawArrow(ctx, bX, bY, angle);
+  }
 
-    if (!asMutualLayer) {
-      drawArrow(ctx, bX, bY, angle);
-    }
+  for (let i = 0; i < backwardCount; i++) {
+    const offset = lineIndex * spacing - totalWidth / 2;
+    lineIndex++;
+
+    const aX = endX + nx * offset;
+    const aY = endY + ny * offset;
+    const bX = startX + nx * offset;
+    const bY = startY + ny * offset;
+
+    ctx.beginPath();
+    ctx.moveTo(aX, aY);
+    ctx.lineTo(bX, bY);
+    ctx.stroke();
+    drawArrow(ctx, bX, bY, angle + Math.PI);
   }
 
   ctx.restore();
