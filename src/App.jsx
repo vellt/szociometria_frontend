@@ -670,7 +670,7 @@ function Survey({ students, activeId, onSave, onBack }) {
       <div className="survey-body">
         <div className="notice warn">
           <strong>Hogyan töltsd ki?</strong><br />
-          Minden kérdésnél válaszolj egy, két vagy három osztálytársad nevével. Nem kötelező mindhárom helyet kitölteni.
+          Minden kérdésnél válaszolj egy, két vagy három osztálytársad nevével. Nem kötelező mindhárom helyet kitölteni, sőt.
           Egy kérdésen belül ugyanazt az osztálytársat csak egyszer lehet kiválasztani.
         </div>
 
@@ -724,19 +724,29 @@ function SociogramCanvas({ students, responses }) {
   const d3Ref = useRef(window.d3 || null);
 
   const [d3Ready, setD3Ready] = useState(Boolean(window.d3));
-  const [qMode, setQMode] = useState("core");
-  const [showPos, setShowPos] = useState(true);
-  const [showNeg, setShowNeg] = useState(false);
-  const [showMut, setShowMut] = useState(true);
+
+  // ÖSSZES legyen az alapértelmezett nézet.
+  // A pozitív / figyelmet igénylő külön szűrőként működik.
+  const [relationMode, setRelationMode] = useState("all"); 
+  const [showMut, setShowMut] = useState(false);
+  const [mutualOnly, setMutualOnly] = useState(false);
   const [showBoy, setShowBoy] = useState(true);
   const [showGirl, setShowGirl] = useState(true);
+
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, node: null, stats: null });
 
-  const filterRef = useRef({ showPos: true, showNeg: false, showMut: true, showBoy: true, showGirl: true });
+  const filterRef = useRef({
+    relationMode: "all",
+    showMut: false,
+    mutualOnly: false,
+    showBoy: true,
+    showGirl: true,
+  });
+
   useEffect(() => {
-    filterRef.current = { showPos, showNeg, showMut, showBoy, showGirl };
+    filterRef.current = { relationMode, showMut, mutualOnly, showBoy, showGirl };
     drawFrame();
-  }, [showPos, showNeg, showMut, showBoy, showGirl]);
+  }, [relationMode, showMut, mutualOnly, showBoy, showGirl]);
 
   useEffect(() => {
     if (window.d3) {
@@ -744,6 +754,7 @@ function SociogramCanvas({ students, responses }) {
       setD3Ready(true);
       return;
     }
+
     const existing = document.querySelector("script[data-d3-loader='true']");
     if (existing) {
       existing.addEventListener("load", () => {
@@ -752,6 +763,7 @@ function SociogramCanvas({ students, responses }) {
       }, { once: true });
       return;
     }
+
     const script = document.createElement("script");
     script.src = "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js";
     script.async = true;
@@ -763,17 +775,7 @@ function SociogramCanvas({ students, responses }) {
     document.head.appendChild(script);
   }, []);
 
-  const filteredResponses = useMemo(() => {
-    const qids = new Set(
-      QUESTIONS.filter(q => {
-        if (qMode === "core") return q.core;
-        if (qMode === "all-pos") return q.type === "positive";
-        if (qMode === "all-neg") return q.type === "negative";
-        return true;
-      }).map(q => q.id)
-    );
-    return responses.filter(r => qids.has(Number(r.question_id)));
-  }, [responses, qMode]);
+  const filteredResponses = useMemo(() => responses, [responses]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -830,26 +832,48 @@ function SociogramCanvas({ students, responses }) {
       const source = Number(r.voter_student_id);
       const target = Number(r.target_student_id);
       const qid = Number(r.question_id);
+
       if (!validIds.has(source) || !validIds.has(target) || source === target) return;
+
       const q = QUESTIONS.find(x => x.id === qid);
       if (!q) return;
+
       const key = `${source}_${target}_${q.type}`;
-      const existing = edgeMap.get(key) || { source, target, type: q.type, weight: 0, mutual: false };
+      const existing = edgeMap.get(key) || {
+        source,
+        target,
+        type: q.type,
+        weight: 0,
+        mutual: false,
+      };
+
       existing.weight += 1;
       edgeMap.set(key, existing);
     });
 
     const edges = [...edgeMap.values()];
+
     edges.forEach(e => {
-      const reverse = edges.find(x => x.source === e.target && x.target === e.source && x.type === e.type);
-      if (reverse && e.type === "positive") {
+      const reverse = edges.find(
+        x => x.source === e.target &&
+             x.target === e.source &&
+             x.type === e.type
+      );
+
+      if (reverse) {
         e.mutual = true;
         reverse.mutual = true;
       }
     });
 
     const nodeById = new Map(nodes.map(n => [n.id, n]));
-    const links = edges.map(e => ({ ...e, source: nodeById.get(e.source), target: nodeById.get(e.target) })).filter(e => e.source && e.target);
+    const links = edges
+      .map(e => ({
+        ...e,
+        source: nodeById.get(e.source),
+        target: nodeById.get(e.target),
+      }))
+      .filter(e => e.source && e.target);
 
     nodesRef.current = nodes;
     linksRef.current = links;
@@ -890,8 +914,10 @@ function SociogramCanvas({ students, responses }) {
   useEffect(() => {
     if (!d3Ready) return;
     buildGraph();
+
     const onResize = () => buildGraph();
     window.addEventListener("resize", onResize);
+
     return () => {
       window.removeEventListener("resize", onResize);
       if (simRef.current) simRef.current.stop();
@@ -918,6 +944,7 @@ function SociogramCanvas({ students, responses }) {
 
   function scheduleDraw() {
     if (rafRef.current) return;
+
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       drawFrame();
@@ -929,18 +956,35 @@ function SociogramCanvas({ students, responses }) {
     return (f.showBoy && n.gender === "m") || (f.showGirl && n.gender === "f");
   }
 
-  function shouldShowLink(l) {
+  function shouldShowBaseLink(l) {
     const f = filterRef.current;
+
     if (!isNodeVisible(l.source) || !isNodeVisible(l.target)) return false;
-    if (l.type === "positive" && !f.showPos) return false;
-    if (l.type === "negative" && !f.showNeg) return false;
-    if (l.mutual && l.type === "positive" && !f.showMut) return false;
-    return true;
+    if (f.mutualOnly) return false;
+
+    if (f.relationMode === "positive") return l.type === "positive";
+    if (f.relationMode === "negative") return l.type === "negative";
+
+    return l.type === "positive" || l.type === "negative";
+  }
+
+  function shouldShowMutualLayer(l) {
+    const f = filterRef.current;
+
+    if (!f.showMut && !f.mutualOnly) return false;
+    if (!l.mutual) return false;
+    if (!isNodeVisible(l.source) || !isNodeVisible(l.target)) return false;
+
+    if (f.relationMode === "positive") return l.type === "positive";
+    if (f.relationMode === "negative") return l.type === "negative";
+
+    return l.type === "positive" || l.type === "negative";
   }
 
   function drawFrame() {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
     const ctx = canvas.getContext("2d");
     const width = canvas.clientWidth || 900;
     const height = expanded ? canvas.clientHeight : (canvas.clientHeight || 540);
@@ -957,44 +1001,24 @@ function SociogramCanvas({ students, responses }) {
     }
 
     linksRef.current.forEach(l => {
-      if (!shouldShowLink(l)) return;
-      const sx = l.source.x, sy = l.source.y, tx = l.target.x, ty = l.target.y;
-      const dx = tx - sx, dy = ty - sy;
-      const dist = Math.hypot(dx, dy) || 1;
-      const ux = dx / dist, uy = dy / dist;
-      const nx = -uy, ny = ux;
-      const isPositiveMutual = l.mutual && l.type === "positive";
-      const nodeR = expanded ? 28 : 23;
-      const offset = isPositiveMutual ? (expanded ? 10 : 7) : 0;
-      const startX = sx + ux * nodeR + nx * offset;
-      const startY = sy + uy * nodeR + ny * offset;
-      const endX = tx - ux * nodeR + nx * offset;
-      const endY = ty - uy * nodeR + ny * offset;
-      const color = l.type === "negative" ? "#d93025" : isPositiveMutual ? "#1a73e8" : "#188038";
+      if (!shouldShowBaseLink(l)) return;
+      drawRelationLink(ctx, l, false);
+    });
 
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = isPositiveMutual ? 0.7 : 0.45;
-      ctx.lineWidth = isPositiveMutual ? 2.4 : Math.min(1.1 + l.weight * 0.18, 2.3);
-      if (!isPositiveMutual) ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(startX, startY);
-      ctx.lineTo(endX, endY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      const angle = Math.atan2(endY - startY, endX - startX);
-      drawArrow(ctx, endX, endY, angle);
-      if (isPositiveMutual) drawArrow(ctx, startX, startY, angle + Math.PI);
-      ctx.restore();
+    linksRef.current.forEach(l => {
+      if (!shouldShowMutualLayer(l)) return;
+      drawRelationLink(ctx, l, true);
     });
 
     nodesRef.current.forEach(n => {
       if (!isNodeVisible(n)) return;
+
       const isHovered = hoveredRef.current === n.id;
       const r = expanded ? (isHovered ? 32 : 27) : (isHovered ? 23 : 19);
       const fill = n.gender === "f" ? "#c33d7b" : "#1a73e8";
+
       ctx.save();
+
       if (isHovered) {
         ctx.globalAlpha = 0.14;
         ctx.fillStyle = fill;
@@ -1002,26 +1026,86 @@ function SociogramCanvas({ students, responses }) {
         ctx.arc(n.x, n.y, r + 10, 0, Math.PI * 2);
         ctx.fill();
       }
+
       ctx.globalAlpha = 1;
       ctx.fillStyle = fill;
       ctx.beginPath();
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.strokeStyle = "#fff";
       ctx.lineWidth = 3;
       ctx.stroke();
+
       ctx.fillStyle = "#fff";
       ctx.font = `700 ${expanded ? (isHovered ? 13 : 12) : (isHovered ? 10 : 9)}px 'Google Sans', sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(initials(n.label), n.x, n.y);
+
       ctx.fillStyle = "rgba(32,33,36,.74)";
       ctx.font = expanded ? `${isHovered ? "600 14px" : "500 13px"} 'Roboto', sans-serif` : `${isHovered ? "500 11px" : "400 10px"} 'Roboto', sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
       ctx.fillText(n.label, n.x, n.y + r + 5);
+
       ctx.restore();
     });
+  }
+
+  function drawRelationLink(ctx, l, asMutualLayer) {
+    const sx = l.source.x;
+    const sy = l.source.y;
+    const tx = l.target.x;
+    const ty = l.target.y;
+
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dist = Math.hypot(dx, dy) || 1;
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const nx = -uy;
+    const ny = ux;
+
+    const nodeR = expanded ? 28 : 23;
+    const offset = asMutualLayer ? (expanded ? 13 : 9) : 0;
+
+    const startX = sx + ux * nodeR + nx * offset;
+    const startY = sy + uy * nodeR + ny * offset;
+    const endX = tx - ux * nodeR + nx * offset;
+    const endY = ty - uy * nodeR + ny * offset;
+
+    const color = asMutualLayer
+      ? "#1a73e8"
+      : l.type === "negative"
+        ? "#d93025"
+        : "#188038";
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = asMutualLayer ? 0.86 : 0.42;
+    ctx.lineWidth = asMutualLayer ? 3.1 : Math.min(1.1 + l.weight * 0.18, 2.3);
+
+    if (!asMutualLayer) ctx.setLineDash([5, 5]);
+
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+    const angle = Math.atan2(endY - startY, endX - startX);
+
+    if (asMutualLayer) {
+      drawArrow(ctx, endX, endY, angle);
+      drawArrow(ctx, startX, startY, angle + Math.PI);
+    } else {
+      drawArrow(ctx, endX, endY, angle);
+    }
+
+    ctx.restore();
   }
 
   function drawArrow(ctx, x, y, angle) {
@@ -1037,17 +1121,32 @@ function SociogramCanvas({ students, responses }) {
   const getNodeAt = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
+
     const rect = canvas.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
+
     return nodesRef.current.find(n => isNodeVisible(n) && Math.hypot(n.x - mx, n.y - my) <= 25) || null;
   }, []);
 
   function nodeStats(nodeId) {
-    const posRec = filteredResponses.filter(r => Number(r.target_student_id) === nodeId && QUESTIONS.find(q => q.id === Number(r.question_id))?.type === "positive").length;
-    const negRec = filteredResponses.filter(r => Number(r.target_student_id) === nodeId && QUESTIONS.find(q => q.id === Number(r.question_id))?.type === "negative").length;
+    const posRec = filteredResponses.filter(r =>
+      Number(r.target_student_id) === nodeId &&
+      QUESTIONS.find(q => q.id === Number(r.question_id))?.type === "positive"
+    ).length;
+
+    const negRec = filteredResponses.filter(r =>
+      Number(r.target_student_id) === nodeId &&
+      QUESTIONS.find(q => q.id === Number(r.question_id))?.type === "negative"
+    ).length;
+
     const given = filteredResponses.filter(r => Number(r.voter_student_id) === nodeId).length;
-    const mutual = linksRef.current.filter(l => l.mutual && l.type === "positive" && (l.source.id === nodeId || l.target.id === nodeId)).length;
+
+    const mutual = linksRef.current.filter(l =>
+      l.mutual &&
+      (l.source.id === nodeId || l.target.id === nodeId)
+    ).length;
+
     return { posRec, negRec, given, mutual };
   }
 
@@ -1066,7 +1165,9 @@ function SociogramCanvas({ students, responses }) {
         draggingRef.current.fy = clientY - rect.top;
         draggingRef.current.x = draggingRef.current.fx;
         draggingRef.current.y = draggingRef.current.fy;
+
         if (simRef.current) simRef.current.alphaTarget(0.03).restart();
+
         scheduleDraw();
         e.preventDefault?.();
         return;
@@ -1079,6 +1180,7 @@ function SociogramCanvas({ students, responses }) {
       if (n) {
         const mx = clientX - rect.left;
         const my = clientY - rect.top;
+
         setTooltip({
           visible: true,
           x: Math.min(mx + 14, canvas.clientWidth - 255),
@@ -1089,6 +1191,7 @@ function SociogramCanvas({ students, responses }) {
       } else {
         setTooltip(t => ({ ...t, visible: false }));
       }
+
       scheduleDraw();
     };
 
@@ -1096,10 +1199,13 @@ function SociogramCanvas({ students, responses }) {
       const point = e.touches?.[0] || e;
       const n = getNodeAt(point.clientX, point.clientY);
       if (!n) return;
+
       draggingRef.current = n;
       n.fx = n.x;
       n.fy = n.y;
+
       if (simRef.current) simRef.current.alphaTarget(0.03).restart();
+
       e.preventDefault?.();
     };
 
@@ -1109,6 +1215,7 @@ function SociogramCanvas({ students, responses }) {
         draggingRef.current.fy = null;
         draggingRef.current = null;
       }
+
       if (simRef.current) simRef.current.alphaTarget(0);
     };
 
@@ -1145,24 +1252,74 @@ function SociogramCanvas({ students, responses }) {
       <button className="sg-expand-btn" onClick={() => setExpanded(v => !v)}>
         {expanded ? "↙ Eredeti méret" : "⛶ Teljes szélesség"}
       </button>
+
       <div className="sg-controls">
-        <select className="sg-select" value={qMode} onChange={e => setQMode(e.target.value)}>
-          <option value="core">Rokonszenvi főkérdések</option>
-          <option value="all-pos">Összes pozitív</option>
-          <option value="all-neg">Figyelmet igénylő kérdések</option>
-          <option value="all">Minden kérdés</option>
-        </select>
-        <button className={`filter-pill${showPos ? " on-pos" : ""}`} onClick={() => setShowPos(v => !v)}>Pozitív</button>
-        <button className={`filter-pill${showNeg ? " on-neg" : ""}`} onClick={() => setShowNeg(v => !v)}>Figyelmet igénylő</button>
-        <button className={`filter-pill${showMut ? " on-mut" : ""}`} onClick={() => setShowMut(v => !v)}>Kölcsönös</button>
-        <button className={`filter-pill${showBoy ? " on-boy" : ""}`} onClick={() => setShowBoy(v => !v)}>Fiú</button>
-        <button className={`filter-pill${showGirl ? " on-girl" : ""}`} onClick={() => setShowGirl(v => !v)}>Lány</button>
+        <button
+          className={`filter-pill${relationMode === "all" ? " on-mut" : ""}`}
+          onClick={() => setRelationMode("all")}
+        >
+          Összes
+        </button>
+
+        <button
+          className={`filter-pill${relationMode === "positive" ? " on-pos" : ""}`}
+          onClick={() => setRelationMode("positive")}
+        >
+          Pozitív
+        </button>
+
+        <button
+          className={`filter-pill${relationMode === "negative" ? " on-neg" : ""}`}
+          onClick={() => setRelationMode("negative")}
+        >
+          Figyelmet igénylő
+        </button>
+
+        <button
+          className={`filter-pill${showMut ? " on-mut" : ""}`}
+          onClick={() => {
+            setShowMut(v => {
+              const next = !v;
+              if (next) setMutualOnly(false);
+              return next;
+            });
+          }}
+        >
+          Kölcsönös
+        </button>
+
+        <button
+          className={`filter-pill${mutualOnly ? " on-mut" : ""}`}
+          onClick={() => {
+            setMutualOnly(v => {
+              const next = !v;
+              if (next) setShowMut(false);
+              return next;
+            });
+          }}
+        >
+          Csak kölcsönös
+        </button>
+
+        <button
+          className={`filter-pill${showBoy ? " on-boy" : ""}`}
+          onClick={() => setShowBoy(v => !v)}
+        >
+          Fiú
+        </button>
+
+        <button
+          className={`filter-pill${showGirl ? " on-girl" : ""}`}
+          onClick={() => setShowGirl(v => !v)}
+        >
+          Lány
+        </button>
       </div>
 
       <div className="sg-legend">
         <span className="leg-item"><span className="leg-line" style={{ background: "#188038", opacity: .7 }} /> pozitív</span>
         <span className="leg-item"><span className="leg-line" style={{ background: "#d93025", opacity: .7 }} /> pedagógiai figyelmet igénylő</span>
-        <span className="leg-item"><span className="leg-line" style={{ background: "#1a73e8", height: 3 }} /> kölcsönös</span>
+        <span className="leg-item"><span className="leg-line" style={{ background: "#1a73e8", height: 3 }} /> kölcsönös réteg</span>
         <span className="leg-item"><span className="leg-circ" style={{ background: "#1a73e8" }} /> fiú</span>
         <span className="leg-item"><span className="leg-circ" style={{ background: "#c33d7b" }} /> lány</span>
         <span className="sg-hint">Húzd a csomópontokat</span>
