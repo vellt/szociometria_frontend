@@ -711,6 +711,7 @@ function Survey({ students, activeId, onSave, onBack }) {
   );
 }
 
+
 function SociogramCanvas({ students, responses }) {
   const [expanded, setExpanded] = useState(false);
   const canvasRef = useRef(null);
@@ -724,15 +725,11 @@ function SociogramCanvas({ students, responses }) {
   const d3Ref = useRef(window.d3 || null);
 
   const [d3Ready, setD3Ready] = useState(Boolean(window.d3));
-
-  // ÖSSZES legyen az alapértelmezett nézet.
-  // A pozitív / figyelmet igénylő külön szűrőként működik.
-  const [relationMode, setRelationMode] = useState("all"); 
+  const [relationMode, setRelationMode] = useState("all");
   const [showMut, setShowMut] = useState(false);
   const [mutualOnly, setMutualOnly] = useState(false);
   const [showBoy, setShowBoy] = useState(true);
   const [showGirl, setShowGirl] = useState(true);
-
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, node: null, stats: null });
 
   const filterRef = useRef({
@@ -813,6 +810,7 @@ function SociogramCanvas({ students, responses }) {
     const nodes = students.map((s, i) => {
       const old = previous.get(Number(s.id));
       const angle = (i / Math.max(students.length, 1)) * Math.PI * 2;
+
       return {
         id: Number(s.id),
         label: s.displayName || s.code || `#${s.id}`,
@@ -826,7 +824,7 @@ function SociogramCanvas({ students, responses }) {
     });
 
     const validIds = new Set(nodes.map(n => n.id));
-    const edgeMap = new Map();
+    const directedMap = new Map();
 
     filteredResponses.forEach(r => {
       const source = Number(r.voter_student_id);
@@ -839,39 +837,62 @@ function SociogramCanvas({ students, responses }) {
       if (!q) return;
 
       const key = `${source}_${target}_${q.type}`;
-      const existing = edgeMap.get(key) || {
+      const existing = directedMap.get(key) || {
         source,
         target,
         type: q.type,
         weight: 0,
-        mutual: false,
       };
 
       existing.weight += 1;
-      edgeMap.set(key, existing);
+      directedMap.set(key, existing);
     });
 
-    const edges = [...edgeMap.values()];
+    const pairMap = new Map();
 
-    edges.forEach(e => {
-      const reverse = edges.find(
-        x => x.source === e.target &&
-             x.target === e.source &&
-             x.type === e.type
-      );
+    [...directedMap.values()].forEach(e => {
+      const a = Math.min(e.source, e.target);
+      const b = Math.max(e.source, e.target);
+      const key = `${a}_${b}_${e.type}`;
 
-      if (reverse) {
-        e.mutual = true;
-        reverse.mutual = true;
+      const item = pairMap.get(key) || {
+        a,
+        b,
+        type: e.type,
+        forwardWeight: 0,
+        backwardWeight: 0,
+        weight: 0,
+        mutualCount: 0,
+        mutual: false,
+      };
+
+      if (e.source === a && e.target === b) {
+        item.forwardWeight += e.weight;
+      } else {
+        item.backwardWeight += e.weight;
       }
+
+      item.weight = item.forwardWeight + item.backwardWeight;
+      item.mutualCount = Math.min(item.forwardWeight, item.backwardWeight);
+      item.mutual = item.mutualCount > 0;
+
+      pairMap.set(key, item);
     });
 
     const nodeById = new Map(nodes.map(n => [n.id, n]));
-    const links = edges
+
+    const links = [...pairMap.values()]
       .map(e => ({
-        ...e,
-        source: nodeById.get(e.source),
-        target: nodeById.get(e.target),
+        source: nodeById.get(e.a),
+        target: nodeById.get(e.b),
+        sourceId: e.a,
+        targetId: e.b,
+        type: e.type,
+        weight: e.weight,
+        forwardWeight: e.forwardWeight,
+        backwardWeight: e.backwardWeight,
+        mutualCount: e.mutualCount,
+        mutual: e.mutual,
       }))
       .filter(e => e.source && e.target);
 
@@ -956,29 +977,27 @@ function SociogramCanvas({ students, responses }) {
     return (f.showBoy && n.gender === "m") || (f.showGirl && n.gender === "f");
   }
 
-  function shouldShowBaseLink(l) {
+  function relationMatchesMode(l) {
     const f = filterRef.current;
-
-    if (!isNodeVisible(l.source) || !isNodeVisible(l.target)) return false;
-    if (f.mutualOnly) return false;
-
     if (f.relationMode === "positive") return l.type === "positive";
     if (f.relationMode === "negative") return l.type === "negative";
-
     return l.type === "positive" || l.type === "negative";
+  }
+
+  function shouldShowBaseLink(l) {
+    const f = filterRef.current;
+    if (!isNodeVisible(l.source) || !isNodeVisible(l.target)) return false;
+    if (f.mutualOnly) return false;
+    if (l.mutual && f.showMut) return false;
+    return relationMatchesMode(l);
   }
 
   function shouldShowMutualLayer(l) {
     const f = filterRef.current;
-
     if (!f.showMut && !f.mutualOnly) return false;
     if (!l.mutual) return false;
     if (!isNodeVisible(l.source) || !isNodeVisible(l.target)) return false;
-
-    if (f.relationMode === "positive") return l.type === "positive";
-    if (f.relationMode === "negative") return l.type === "negative";
-
-    return l.type === "positive" || l.type === "negative";
+    return relationMatchesMode(l);
   }
 
   function drawFrame() {
@@ -1054,59 +1073,67 @@ function SociogramCanvas({ students, responses }) {
   }
 
   function drawRelationLink(ctx, l, asMutualLayer) {
-    const sx = l.source.x;
-    const sy = l.source.y;
-    const tx = l.target.x;
-    const ty = l.target.y;
+  const sx = l.source.x;
+  const sy = l.source.y;
+  const tx = l.target.x;
+  const ty = l.target.y;
 
-    const dx = tx - sx;
-    const dy = ty - sy;
-    const dist = Math.hypot(dx, dy) || 1;
-    const ux = dx / dist;
-    const uy = dy / dist;
-    const nx = -uy;
-    const ny = ux;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const dist = Math.hypot(dx, dy) || 1;
+  const ux = dx / dist;
+  const uy = dy / dist;
+  const nx = -uy;
+  const ny = ux;
 
-    const nodeR = expanded ? 28 : 23;
-    const offset = asMutualLayer ? (expanded ? 13 : 9) : 0;
+  const nodeR = expanded ? 28 : 23;
+  const startX = sx + ux * nodeR;
+  const startY = sy + uy * nodeR;
+  const endX = tx - ux * nodeR;
+  const endY = ty - uy * nodeR;
+  const angle = Math.atan2(endY - startY, endX - startX);
 
-    const startX = sx + ux * nodeR + nx * offset;
-    const startY = sy + uy * nodeR + ny * offset;
-    const endX = tx - ux * nodeR + nx * offset;
-    const endY = ty - uy * nodeR + ny * offset;
+  const count = asMutualLayer
+    ? Math.max(1, Math.min(l.forwardWeight || 0, l.backwardWeight || 0))
+    : Math.max(1, l.weight || 1);
 
-    const color = asMutualLayer
-      ? "#1a73e8"
-      : l.type === "negative"
-        ? "#d93025"
-        : "#188038";
+  const spacing = expanded ? 7 : 5;
+  const totalWidth = (count - 1) * spacing;
 
-    ctx.save();
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.globalAlpha = asMutualLayer ? 0.86 : 0.42;
-    ctx.lineWidth = asMutualLayer ? 3.1 : Math.min(1.1 + l.weight * 0.18, 2.3);
+  const color = asMutualLayer
+    ? "#1a73e8"
+    : l.type === "negative"
+      ? "#d93025"
+      : "#188038";
 
-    if (!asMutualLayer) ctx.setLineDash([5, 5]);
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.globalAlpha = asMutualLayer ? 0.9 : 0.48;
+  ctx.lineWidth = asMutualLayer ? (expanded ? 2.2 : 1.9) : 1.7;
+
+  if (!asMutualLayer) ctx.setLineDash([5, 5]);
+
+  for (let i = 0; i < count; i++) {
+    const offset = i * spacing - totalWidth / 2;
+
+    const aX = startX + nx * offset;
+    const aY = startY + ny * offset;
+    const bX = endX + nx * offset;
+    const bY = endY + ny * offset;
 
     ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(endX, endY);
+    ctx.moveTo(aX, aY);
+    ctx.lineTo(bX, bY);
     ctx.stroke();
 
-    ctx.setLineDash([]);
-
-    const angle = Math.atan2(endY - startY, endX - startX);
-
-    if (asMutualLayer) {
-      drawArrow(ctx, endX, endY, angle);
-      drawArrow(ctx, startX, startY, angle + Math.PI);
-    } else {
-      drawArrow(ctx, endX, endY, angle);
+    if (!asMutualLayer) {
+      drawArrow(ctx, bX, bY, angle);
     }
-
-    ctx.restore();
   }
+
+  ctx.restore();
+}
 
   function drawArrow(ctx, x, y, angle) {
     const size = 7;
@@ -1319,7 +1346,7 @@ function SociogramCanvas({ students, responses }) {
       <div className="sg-legend">
         <span className="leg-item"><span className="leg-line" style={{ background: "#188038", opacity: .7 }} /> pozitív</span>
         <span className="leg-item"><span className="leg-line" style={{ background: "#d93025", opacity: .7 }} /> pedagógiai figyelmet igénylő</span>
-        <span className="leg-item"><span className="leg-line" style={{ background: "#1a73e8", height: 3 }} /> kölcsönös réteg</span>
+        <span className="leg-item"><span className="leg-line" style={{ background: "#1a73e8", height: 3 }} /> kölcsönös párhuzamos szálak</span>
         <span className="leg-item"><span className="leg-circ" style={{ background: "#1a73e8" }} /> fiú</span>
         <span className="leg-item"><span className="leg-circ" style={{ background: "#c33d7b" }} /> lány</span>
         <span className="sg-hint">Húzd a csomópontokat</span>
