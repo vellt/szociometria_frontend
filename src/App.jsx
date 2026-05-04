@@ -32,7 +32,7 @@ const CORE_IDS = QUESTIONS.filter(q => q.core).map(q => q.id);
 const NEGATIVE_IDS = QUESTIONS.filter(q => q.type === "negative").map(q => q.id);
 
 const initials = (s = "") =>
-  String(s).replace(/[^A-ZÁÉÍÓÖŐÚÜŰ0-9]/gi, "").slice(0, 2).toUpperCase() || "??";
+  String(s).replace(/[^A-ZÁÉÍÓÖŐÚÜŰ0-9]/gi, "").slice(0, 3).toUpperCase() || "??";
 
 const displayName = st => st?.name || st?.code || "";
 
