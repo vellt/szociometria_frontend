@@ -444,6 +444,7 @@ const GLOBAL_CSS = `
 
 function HeroGraphPreview() {
   const canvasRef = useRef(null);
+  
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -723,6 +724,7 @@ function SociogramCanvas({ students, responses }) {
   const hoveredRef = useRef(null);
   const rafRef = useRef(null);
   const d3Ref = useRef(window.d3 || null);
+  const [questionScope, setQuestionScope] = useState("all");
 
   const [d3Ready, setD3Ready] = useState(Boolean(window.d3));
   const [relationMode, setRelationMode] = useState("all");
@@ -733,6 +735,7 @@ function SociogramCanvas({ students, responses }) {
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, node: null, stats: null });
 
   const filterRef = useRef({
+    questionScope: "all",
     relationMode: "all",
     showMut: false,
     mutualOnly: false,
@@ -741,9 +744,9 @@ function SociogramCanvas({ students, responses }) {
   });
 
   useEffect(() => {
-    filterRef.current = { relationMode, showMut, mutualOnly, showBoy, showGirl };
+    filterRef.current = { questionScope, relationMode, showMut, mutualOnly, showBoy, showGirl };
     drawFrame();
-  }, [relationMode, showMut, mutualOnly, showBoy, showGirl]);
+  }, [questionScope, relationMode, showMut, mutualOnly, showBoy, showGirl]);
 
   useEffect(() => {
     if (window.d3) {
@@ -772,7 +775,14 @@ function SociogramCanvas({ students, responses }) {
     document.head.appendChild(script);
   }, []);
 
-  const filteredResponses = useMemo(() => responses, [responses]);
+  const filteredResponses = useMemo(() => {
+    if (questionScope === "core") {
+      const coreSet = new Set(CORE_IDS);
+      return responses.filter(r => coreSet.has(Number(r.question_id)));
+    }
+
+    return responses;
+  }, [responses, questionScope]);
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1321,6 +1331,19 @@ function SociogramCanvas({ students, responses }) {
       </button>
 
       <div className="sg-controls">
+        <button
+          className={`filter-pill${questionScope === "all" ? " on-mut" : ""}`}
+          onClick={() => setQuestionScope("all")}
+        >
+          20 kérdés
+        </button>
+
+        <button
+          className={`filter-pill${questionScope === "core" ? " on-mut" : ""}`}
+          onClick={() => setQuestionScope("core")}
+        >
+          Főkérdések
+        </button>
         <button
           className={`filter-pill${relationMode === "all" ? " on-mut" : ""}`}
           onClick={() => setRelationMode("all")}
