@@ -724,7 +724,9 @@ function SociogramCanvas({ students, responses }) {
   const hoveredRef = useRef(null);
   const rafRef = useRef(null);
   const d3Ref = useRef(window.d3 || null);
-  const [questionScope, setQuestionScope] = useState("all");
+
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState([]);
+  const [questionPanelOpen, setQuestionPanelOpen] = useState(false);
 
   const [d3Ready, setD3Ready] = useState(Boolean(window.d3));
   const [relationMode, setRelationMode] = useState("all");
@@ -735,7 +737,7 @@ function SociogramCanvas({ students, responses }) {
   const [tooltip, setTooltip] = useState({ visible: false, x: 0, y: 0, node: null, stats: null });
 
   const filterRef = useRef({
-    questionScope: "all",
+    selectedQuestionIds: [],
     relationMode: "all",
     showMut: false,
     mutualOnly: false,
@@ -744,9 +746,9 @@ function SociogramCanvas({ students, responses }) {
   });
 
   useEffect(() => {
-    filterRef.current = { questionScope, relationMode, showMut, mutualOnly, showBoy, showGirl };
+    filterRef.current = { selectedQuestionIds, relationMode, showMut, mutualOnly, showBoy, showGirl };
     drawFrame();
-  }, [questionScope, relationMode, showMut, mutualOnly, showBoy, showGirl]);
+  }, [selectedQuestionIds, relationMode, showMut, mutualOnly, showBoy, showGirl]);
 
   useEffect(() => {
     if (window.d3) {
@@ -776,13 +778,26 @@ function SociogramCanvas({ students, responses }) {
   }, []);
 
   const filteredResponses = useMemo(() => {
-    if (questionScope === "core") {
-      const coreSet = new Set(CORE_IDS);
-      return responses.filter(r => coreSet.has(Number(r.question_id)));
-    }
+    if (!selectedQuestionIds.length) return responses;
+    const selectedSet = new Set(selectedQuestionIds.map(Number));
+    return responses.filter(r => selectedSet.has(Number(r.question_id)));
+  }, [responses, selectedQuestionIds]);
 
-    return responses;
-  }, [responses, questionScope]);
+  function toggleQuestion(qid) {
+    setSelectedQuestionIds(prev =>
+      prev.includes(qid)
+        ? prev.filter(id => id !== qid)
+        : [...prev, qid]
+    );
+  }
+
+  function selectAllQuestions() {
+    setSelectedQuestionIds([]);
+  }
+
+  function selectCoreQuestions() {
+    setSelectedQuestionIds(CORE_IDS);
+  }
 
   const resizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -876,11 +891,8 @@ function SociogramCanvas({ students, responses }) {
         mutual: false,
       };
 
-      if (e.source === a && e.target === b) {
-        item.forwardWeight += e.weight;
-      } else {
-        item.backwardWeight += e.weight;
-      }
+      if (e.source === a && e.target === b) item.forwardWeight += e.weight;
+      else item.backwardWeight += e.weight;
 
       item.weight = item.forwardWeight + item.backwardWeight;
       item.mutualCount = Math.min(item.forwardWeight, item.backwardWeight);
@@ -975,7 +987,6 @@ function SociogramCanvas({ students, responses }) {
 
   function scheduleDraw() {
     if (rafRef.current) return;
-
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       drawFrame();
@@ -1083,39 +1094,74 @@ function SociogramCanvas({ students, responses }) {
   }
 
   function drawRelationLink(ctx, l, asMutualLayer) {
-  const sx = l.source.x;
-  const sy = l.source.y;
-  const tx = l.target.x;
-  const ty = l.target.y;
+    const sx = l.source.x;
+    const sy = l.source.y;
+    const tx = l.target.x;
+    const ty = l.target.y;
 
-  const dx = tx - sx;
-  const dy = ty - sy;
-  const dist = Math.hypot(dx, dy) || 1;
-  const ux = dx / dist;
-  const uy = dy / dist;
-  const nx = -uy;
-  const ny = ux;
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dist = Math.hypot(dx, dy) || 1;
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const nx = -uy;
+    const ny = ux;
 
-  const nodeR = expanded ? 28 : 23;
-  const startX = sx + ux * nodeR;
-  const startY = sy + uy * nodeR;
-  const endX = tx - ux * nodeR;
-  const endY = ty - uy * nodeR;
-  const angle = Math.atan2(endY - startY, endX - startX);
+    const nodeR = expanded ? 28 : 23;
+    const startX = sx + ux * nodeR;
+    const startY = sy + uy * nodeR;
+    const endX = tx - ux * nodeR;
+    const endY = ty - uy * nodeR;
+    const angle = Math.atan2(endY - startY, endX - startX);
 
-  if (asMutualLayer) {
-    const count = Math.max(1, Math.min(l.forwardWeight || 0, l.backwardWeight || 0));
+    if (asMutualLayer) {
+      const count = Math.max(1, Math.min(l.forwardWeight || 0, l.backwardWeight || 0));
+      const spacing = expanded ? 7 : 5;
+      const totalWidth = (count - 1) * spacing;
+
+      ctx.save();
+      ctx.strokeStyle = "#1a73e8";
+      ctx.fillStyle = "#1a73e8";
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = expanded ? 2.2 : 1.9;
+
+      for (let i = 0; i < count; i++) {
+        const offset = i * spacing - totalWidth / 2;
+        const aX = startX + nx * offset;
+        const aY = startY + ny * offset;
+        const bX = endX + nx * offset;
+        const bY = endY + ny * offset;
+
+        ctx.beginPath();
+        ctx.moveTo(aX, aY);
+        ctx.lineTo(bX, bY);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+      return;
+    }
+
+    const color = l.type === "negative" ? "#d93025" : "#188038";
     const spacing = expanded ? 7 : 5;
-    const totalWidth = (count - 1) * spacing;
+
+    const forwardCount = Math.max(0, l.forwardWeight || 0);
+    const backwardCount = Math.max(0, l.backwardWeight || 0);
+    const totalCount = Math.max(1, forwardCount + backwardCount);
+    const totalWidth = (totalCount - 1) * spacing;
 
     ctx.save();
-    ctx.strokeStyle = "#1a73e8";
-    ctx.fillStyle = "#1a73e8";
-    ctx.globalAlpha = 0.9;
-    ctx.lineWidth = expanded ? 2.2 : 1.9;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.48;
+    ctx.lineWidth = 1.7;
+    ctx.setLineDash([5, 5]);
 
-    for (let i = 0; i < count; i++) {
-      const offset = i * spacing - totalWidth / 2;
+    let lineIndex = 0;
+
+    for (let i = 0; i < forwardCount; i++) {
+      const offset = lineIndex * spacing - totalWidth / 2;
+      lineIndex++;
 
       const aX = startX + nx * offset;
       const aY = startY + ny * offset;
@@ -1126,64 +1172,27 @@ function SociogramCanvas({ students, responses }) {
       ctx.moveTo(aX, aY);
       ctx.lineTo(bX, bY);
       ctx.stroke();
+      drawArrow(ctx, bX, bY, angle);
+    }
 
+    for (let i = 0; i < backwardCount; i++) {
+      const offset = lineIndex * spacing - totalWidth / 2;
+      lineIndex++;
+
+      const aX = endX + nx * offset;
+      const aY = endY + ny * offset;
+      const bX = startX + nx * offset;
+      const bY = startY + ny * offset;
+
+      ctx.beginPath();
+      ctx.moveTo(aX, aY);
+      ctx.lineTo(bX, bY);
+      ctx.stroke();
+      drawArrow(ctx, bX, bY, angle + Math.PI);
     }
 
     ctx.restore();
-    return;
   }
-
-  const color = l.type === "negative" ? "#d93025" : "#188038";
-  const spacing = expanded ? 7 : 5;
-
-  const forwardCount = Math.max(0, l.forwardWeight || 0);
-  const backwardCount = Math.max(0, l.backwardWeight || 0);
-  const totalCount = Math.max(1, forwardCount + backwardCount);
-  const totalWidth = (totalCount - 1) * spacing;
-
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.globalAlpha = 0.48;
-  ctx.lineWidth = 1.7;
-  ctx.setLineDash([5, 5]);
-
-  let lineIndex = 0;
-
-  for (let i = 0; i < forwardCount; i++) {
-    const offset = lineIndex * spacing - totalWidth / 2;
-    lineIndex++;
-
-    const aX = startX + nx * offset;
-    const aY = startY + ny * offset;
-    const bX = endX + nx * offset;
-    const bY = endY + ny * offset;
-
-    ctx.beginPath();
-    ctx.moveTo(aX, aY);
-    ctx.lineTo(bX, bY);
-    ctx.stroke();
-    drawArrow(ctx, bX, bY, angle);
-  }
-
-  for (let i = 0; i < backwardCount; i++) {
-    const offset = lineIndex * spacing - totalWidth / 2;
-    lineIndex++;
-
-    const aX = endX + nx * offset;
-    const aY = endY + ny * offset;
-    const bX = startX + nx * offset;
-    const bY = startY + ny * offset;
-
-    ctx.beginPath();
-    ctx.moveTo(aX, aY);
-    ctx.lineTo(bX, bY);
-    ctx.stroke();
-    drawArrow(ctx, bX, bY, angle + Math.PI);
-  }
-
-  ctx.restore();
-}
 
   function drawArrow(ctx, x, y, angle) {
     const size = 7;
@@ -1332,18 +1341,31 @@ function SociogramCanvas({ students, responses }) {
 
       <div className="sg-controls">
         <button
-          className={`filter-pill${questionScope === "all" ? " on-mut" : ""}`}
-          onClick={() => setQuestionScope("all")}
+          className={`filter-pill${selectedQuestionIds.length === 0 ? " on-mut" : ""}`}
+          onClick={selectAllQuestions}
         >
           20 kérdés
         </button>
 
         <button
-          className={`filter-pill${questionScope === "core" ? " on-mut" : ""}`}
-          onClick={() => setQuestionScope("core")}
+          className={`filter-pill${
+            selectedQuestionIds.length === CORE_IDS.length &&
+            CORE_IDS.every(id => selectedQuestionIds.includes(id))
+              ? " on-mut"
+              : ""
+          }`}
+          onClick={selectCoreQuestions}
         >
           Főkérdések
         </button>
+
+        <button
+          className={`filter-pill${questionPanelOpen ? " on-mut" : ""}`}
+          onClick={() => setQuestionPanelOpen(v => !v)}
+        >
+          Kérdések kiválasztása
+        </button>
+
         <button
           className={`filter-pill${relationMode === "all" ? " on-mut" : ""}`}
           onClick={() => setRelationMode("all")}
@@ -1391,20 +1413,74 @@ function SociogramCanvas({ students, responses }) {
           Csak kölcsönös
         </button>
 
-        <button
-          className={`filter-pill${showBoy ? " on-boy" : ""}`}
-          onClick={() => setShowBoy(v => !v)}
-        >
+        <button className={`filter-pill${showBoy ? " on-boy" : ""}`} onClick={() => setShowBoy(v => !v)}>
           Fiú
         </button>
 
-        <button
-          className={`filter-pill${showGirl ? " on-girl" : ""}`}
-          onClick={() => setShowGirl(v => !v)}
-        >
+        <button className={`filter-pill${showGirl ? " on-girl" : ""}`} onClick={() => setShowGirl(v => !v)}>
           Lány
         </button>
       </div>
+
+      {questionPanelOpen && (
+        <div className="sg-question-panel" style={{ padding: "1rem 1.25rem", borderBottom: "1px solid var(--border)", background: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10, fontSize: 13, color: "var(--muted)" }}>
+            <strong style={{ color: "var(--text)", fontSize: 14 }}>Kérdések szűrése</strong>
+            <span>{selectedQuestionIds.length === 0 ? "Mind a 20 kérdés aktív" : `${selectedQuestionIds.length} kérdés kijelölve`}</span>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <button className="filter-pill on-mut" onClick={selectAllQuestions}>Mind a 20</button>
+            <button className="filter-pill on-mut" onClick={selectCoreQuestions}>Csak főkérdések</button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 8, maxHeight: 260, overflowY: "auto", paddingRight: 4 }}>
+            {QUESTIONS.map(q => (
+              <label
+                key={q.id}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 8,
+                  padding: "9px 10px",
+                  border: `1px solid ${q.type === "negative" ? "#f5c6c2" : "#d7e7dd"}`,
+                  borderRadius: 14,
+                  background: q.type === "negative" ? "#fff8f7" : "var(--surface-soft)",
+                  fontSize: 12,
+                  lineHeight: 1.4,
+                  color: "var(--text)",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedQuestionIds.includes(q.id)}
+                  onChange={() => toggleQuestion(q.id)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <b>{q.id}.</b> {q.text}
+                  {q.core && (
+                    <em style={{
+                      display: "inline-block",
+                      marginLeft: 6,
+                      padding: "2px 6px",
+                      borderRadius: 999,
+                      background: "var(--blue-soft)",
+                      color: "#1e40af",
+                      fontStyle: "normal",
+                      fontSize: 10,
+                      fontWeight: 800,
+                    }}>
+                      főkérdés
+                    </em>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="sg-legend">
         <span className="leg-item"><span className="leg-line" style={{ background: "#188038", opacity: .7 }} /> pozitív</span>
